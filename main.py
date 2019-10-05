@@ -223,17 +223,34 @@ def main():
                 cv2.putText(rotated, str(i), square['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
                 i += 1
             
-            top_left = board[0]['vertices'][0]
-            bottom_right = board[0]['vertices'][2]
-            print(board[0]['vertices'])
-            roi = orig_rotated[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
-            try:
-                roi = cv2.resize(roi, (100, 100))
-                cv2.imshow('roi', roi)
-            except:
-                pass
+            src_vertices = np.float32([board[0]['vertices'][0], board[6]['vertices'][1], board[41]['vertices'][2], board[35]['vertices'][3]])
+            dst_vertices = np.float32([(10,10),(rotated.shape[1]-10,10),(rotated.shape[1]-10,rotated.shape[0]-10),(10,rotated.shape[0]-10)])
+            transform = cv2.getPerspectiveTransform(src_vertices, dst_vertices)
             
-
+            transformed = cv2.warpPerspective(orig_rotated, transform, (rotated.shape[1], rotated.shape[0]))
+            
+            for i, square in enumerate(board):
+                pt_array = np.float32([square['vertices']])
+                transformed_vertices = cv2.perspectiveTransform(pt_array, transform)
+                square['vertices'] = [tuple(i) for i in transformed_vertices[0]]
+                
+                draw_poly(transformed, square['vertices'])
+                cv2.putText(transformed, str(i), square['vertices'][3], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+                
+            
+            cv2.imshow('transformed', transformed)
+            
+            # top_left = board[0]['vertices'][0]
+            # bottom_right = board[0]['vertices'][2]
+            # print(board[0]['vertices'])
+            # roi = orig_rotated[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
+            # try:
+                # roi = cv2.resize(roi, (100, 100))
+                # cv2.imshow('roi', roi)
+            # except:
+                # pass
+            
+        
         cv2.imshow('rotated', rotated)
         
         cv2.imshow('frame', frame)
