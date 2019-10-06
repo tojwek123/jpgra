@@ -72,9 +72,9 @@ def contours_to_vertices(contours):
 def euclidean_dist(pt1, pt2):
     return np.sqrt((pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2)
 
-def draw_poly(im, vertices):
+def draw_poly(im, vertices, color, line_width):
     for i in range(len(vertices)):
-        cv2.line(im, vertices[i], vertices[(i+1)%len(vertices)], (0,0,255), 2)
+        cv2.line(im, vertices[i], vertices[(i+1)%len(vertices)], color, line_width)
 
 def main():
 
@@ -100,7 +100,7 @@ def main():
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)        
         edges = cv2.Canny(blurred, 30, 250)
         kernel = np.ones((3,3), np.uint8)
-        edges = cv2.dilate(edges, kernel, iterations=2)
+        edges = cv2.dilate(edges, kernel, iterations=1)
         edges = cv2.erode(edges, kernel, iterations=1)
                 
         contours = cv2.findContours(edges.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
@@ -113,7 +113,7 @@ def main():
             approx = cv2.approxPolyDP(contour, 0.03 * peri, True)
          
             #Logo detection
-            if logo is None and len(approx) > 7:
+            if logo is None and len(approx) > 6:
                 M = cv2.moments(approx)
                 area = M['m00']
                 
@@ -146,14 +146,42 @@ def main():
                     center_x = int((M['m10'] / M['m00']))
                     center_y = int((M['m01'] / M['m00']))
                                                 
-                    square = { 'center': (center_x, center_y), 'vertices': contours_to_vertices(approx) }
+                    square = { 'center': (center_x, center_y), 'vertices': contours_to_vertices(approx), 'area': area }
                     squares.append(square)
                     
-                    cv2.drawContours(frame, [approx], -1, (0, 255, 0), 3)
+                    cv2.drawContours(frame, [approx], -1, (0, 0, 255), 1)
                     #cv2.putText(frame, str(i), tuple(approx[2][0]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255))
-           
+                      
         BOARD_HEIGHT = 7
         BOARD_WIDTH = 6
+           
+        #Remove outliers
+        if len(squares) >= BOARD_HEIGHT * BOARD_WIDTH:
+            new_squares = []
+            
+            for square_1 in squares:
+                neighbors_cnt = 0
+                is_inside_other = False
+                for square_2 in squares:
+                    if square_1 is not square_2:
+                        dist_1_to_2 = euclidean_dist(square_1['center'], square_2['center'])
+                        square_2_dists = []
+                        for i in range(len(square_2['vertices'])):
+                            dist = euclidean_dist(square_2['vertices'][i], square_2['vertices'][(i+1)%len(square_2['vertices'])])
+                            square_2_dists.append(dist)
+                        
+                        max_square_2_dist = max(square_2_dists)
+                        
+                        if abs(1 - max_square_2_dist / dist_1_to_2) < 0.3:
+                            neighbors_cnt += 1
+                            if neighbors_cnt >= 2:
+                                break
+                if neighbors_cnt >= 2 and not is_inside_other:
+                    new_squares.append(square_1)
+            squares = new_squares
+           
+        for square in squares:
+            draw_poly(frame, square['vertices'], (0,255,0), 2)
            
         if len(squares) >= BOARD_HEIGHT * BOARD_WIDTH and logo is not None:
             board_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -251,11 +279,28 @@ def main():
                     sorted_squares += row_squares
                 squares = sorted_squares
                 
-                for i, square in enumerate(squares):
+                for square in squares:
                     top_left = (min(square['vertices'], key=lambda i: i[0])[0], min(square['vertices'], key=lambda i: i[1])[1])
                     bottom_right = (max(square['vertices'], key=lambda i: i[0])[0], max(square['vertices'], key=lambda i: i[1])[1])
+                    square['bb'] = (top_left, bottom_right)
                     
-                    cv2.rectangle(transformed, top_left, bottom_right, (0,0,255), 2)
+                new_squares = []
+                for square_1 in squares:
+                    is_inside_other = False
+                    for square_2 in squares:
+                        if square_1 is not square_2:
+                            center_1 = square_1['center']
+                            (top_left_2, bottom_right_2) = square_2['bb']
+                            
+                            if center_1[0] > top_left_2[0] and center_1[0] < bottom_right_2[0] and center_1[1] > top_left_2[1] and center_1[1] < bottom_right_2[1]:
+                                is_inside_other = True
+                                break
+                    if not is_inside_other:
+                        new_squares.append(square_1)
+                squares = new_squares
+                
+                for i, square in enumerate(squares):
+                    cv2.rectangle(transformed, square['bb'][0], square['bb'][1], (0,255,0), 2)
                     cv2.putText(transformed, str(i), square['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
                     #draw_poly(transformed, square['vertices'])
                      
