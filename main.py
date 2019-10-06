@@ -39,29 +39,6 @@ def is_square(contour):
                            abs(1 - ratio_13_24) < ratio_tolerance 
                            
     return is_really_square
-
-def get_square_angles(contour):
-    (x1, y1) = contour[0][0]
-    (x2, y2) = contour[1][0]
-    (x3, y3) = contour[2][0]
-    (x4, y4) = contour[3][0]
-    
-    angle_1 = np.arctan2(y2-y1,x2-x1) * 180 / np.pi
-    angle_2 = np.arctan2(y3-y2,x3-x2) * 180 / np.pi
-    
-    if angle_1 < 0:
-        angle_1 = 90 - angle_1
-    if angle_1 > 90:
-        angle_1 = angle_1 - 90
-    
-    if angle_2 < 90:
-        angle_2 = 180 - angle_2
-    if angle_2 > 180:
-        angle_2 = angle_2 - 180
-    
-    print(angle_1, angle_2)
-    
-    return (angle_1, angle_2)
     
 def get_line_angle(pt1, pt2):
     return np.arctan2(pt2[1]-pt1[1],pt2[0]-pt1[0]) * 180 / np.pi + 180
@@ -100,20 +77,25 @@ def main():
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)        
         edges = cv2.Canny(blurred, 30, 250)
         kernel = np.ones((3,3), np.uint8)
-        edges = cv2.dilate(edges, kernel, iterations=1)
-        edges = cv2.erode(edges, kernel, iterations=1)
-                
-        contours = cv2.findContours(edges.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
+        
+        edges_for_logo = cv2.dilate(edges, kernel, iterations=3)
+        edges_for_logo = cv2.erode(edges_for_logo, kernel, iterations=1)
+           
+        edges_for_squares = cv2.dilate(edges, kernel, iterations=2)
+        edges_for_squares = cv2.erode(edges_for_squares, kernel, iterations=1)
+           
         
         squares = []
         logo = None
+           
+        contours = cv2.findContours(edges_for_logo.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
         
         for i, contour in enumerate(contours):
             peri = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.03 * peri, True)
          
             #Logo detection
-            if logo is None and len(approx) > 6:
+            if len(approx) > 6:
                 M = cv2.moments(approx)
                 area = M['m00']
                 
@@ -129,14 +111,22 @@ def main():
                     is_circle = True
                     for i in dists:
                         for j in dists:
-                            if abs(i - j) > 5:
+                            if abs(i - j) > 10:
                                 is_circle = False
                     
                     if is_circle:
                         logo = { 'center': (center_x, center_y), 'vertices': vertices, 'radius': int(np.average(dists)) }
                         cv2.circle(frame, (center_x, center_y), 2, (255,0,0), -1)
                         cv2.drawContours(frame, [approx], -1, (0, 0, 255), 2)
+                        break
                         
+        
+        contours = cv2.findContours(edges_for_squares.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
+         
+        for i, contour in enumerate(contours):
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.03 * peri, True)
+         
             #Square detection
             if is_square(approx):
                 M = cv2.moments(approx)
@@ -150,12 +140,11 @@ def main():
                     squares.append(square)
                     
                     cv2.drawContours(frame, [approx], -1, (0, 0, 255), 1)
-                    #cv2.putText(frame, str(i), tuple(approx[2][0]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255))
                       
         BOARD_HEIGHT = 7
         BOARD_WIDTH = 6
            
-        #Remove outliers
+        #Remove outliers and inliers
         if len(squares) >= BOARD_HEIGHT * BOARD_WIDTH:
             new_squares = []
             
@@ -164,6 +153,7 @@ def main():
                 is_inside_other = False
                 for square_2 in squares:
                     if square_1 is not square_2:
+                        #Outliers
                         dist_1_to_2 = euclidean_dist(square_1['center'], square_2['center'])
                         square_2_dists = []
                         for i in range(len(square_2['vertices'])):
@@ -174,16 +164,27 @@ def main():
                         
                         if abs(1 - max_square_2_dist / dist_1_to_2) < 0.3:
                             neighbors_cnt += 1
-                            if neighbors_cnt >= 2:
+                                
+                        #Inliers
+                        square_2_top = min(square_2['vertices'], key=lambda i: i[1])[1]
+                        square_2_bottom = max(square_2['vertices'], key=lambda i: i[1])[1]
+                        square_2_left = min(square_2['vertices'], key=lambda i: i[0])[0]
+                        square_2_right = max(square_2['vertices'], key=lambda i: i[0])[0]
+                        center_1 = square_1['center']
+                        
+                        if center_1[0] > square_2_left and center_1[0] < square_2_right and center_1[1] > square_2_top and center_1[1] < square_2_bottom:
+                            if square_1['area'] < square_2['area']:
+                                is_inside_other = True
                                 break
+                                
                 if neighbors_cnt >= 2 and not is_inside_other:
                     new_squares.append(square_1)
+                    draw_poly(frame, square_1['vertices'], (0,255,0), 2)
             squares = new_squares
-           
-        for square in squares:
-            draw_poly(frame, square['vertices'], (0,255,0), 2)
+            
            
         if len(squares) >= BOARD_HEIGHT * BOARD_WIDTH and logo is not None:
+            #Detect entire board (as rectangle)
             board_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             
             for square in squares:
@@ -200,6 +201,7 @@ def main():
             board_approx = cv2.approxPolyDP(board_contour, 0.03 * peri, True)
             
             if len(board_approx) == 4:
+                #Find furthest side of board rectangle
                 board_vertices = contours_to_vertices(board_approx)
                 
                 cv2.drawContours(frame, [board_approx], -1, (0, 0, 255), 2)
@@ -217,13 +219,15 @@ def main():
                         max_dist = dist
                         max_dist_center = center
                 
-            
+                
                 cv2.circle(frame, max_dist_center, 3, (0,0,255), -1)
                 cv2.line(frame, max_dist_center, logo['center'], (0,0,0), 3)
                 
+                #Detect board rotation angle (line between center of furthest side of board and center of logo)
                 angle = get_line_angle(max_dist_center, logo['center'])
                 rotation_matrix = cv2.getRotationMatrix2D((frame.shape[1]//2, frame.shape[0]//2), angle, 1.0)
                 
+                #Rotate board vertices to perform perspective transformation
                 board_rotated_vertices = rotate_pts(board_vertices, rotation_matrix)
                 board_corners = []
                 for orig, rotated in zip(board_vertices, board_rotated_vertices):
@@ -248,7 +252,7 @@ def main():
                 transformation = cv2.getPerspectiveTransform(orig_vertices, dest_vertices)
                 transformed = cv2.warpPerspective(orig_frame, transformation, (orig_frame.shape[1], orig_frame.shape[0]))
                 
-                
+                #Transform board squares
                 for square in squares:
                     vertices_array = np.float32([square['vertices']])
                     center_array = np.float32([[square['center']]])
@@ -257,7 +261,7 @@ def main():
                     square['vertices'] = [tuple(i) for i in np.int32(transformed_vertices[0])]
                     square['center'] = tuple(np.int32(transformed_center[0])[0])
                     
-                #Get rid of squares out of board
+                #Get rid of figures which are not in the board (if they wasn't removed earlier)
                 margin = 10
                 new_squares = []
                 for square in squares:
@@ -270,6 +274,13 @@ def main():
                         new_squares.append(square)
                 squares = new_squares
                     
+                #Find bounding boxes of transformed board fields
+                for square in squares:
+                    top_left = (min(square['vertices'], key=lambda i: i[0])[0], min(square['vertices'], key=lambda i: i[1])[1])
+                    bottom_right = (max(square['vertices'], key=lambda i: i[0])[0], max(square['vertices'], key=lambda i: i[1])[1])
+                    square['bb'] = (top_left, bottom_right)
+                    
+                #Sort board fields
                 squares.sort(key=lambda i: i['center'][1])
                 sorted_squares = []
                 
@@ -279,159 +290,15 @@ def main():
                     sorted_squares += row_squares
                 squares = sorted_squares
                 
-                for square in squares:
-                    top_left = (min(square['vertices'], key=lambda i: i[0])[0], min(square['vertices'], key=lambda i: i[1])[1])
-                    bottom_right = (max(square['vertices'], key=lambda i: i[0])[0], max(square['vertices'], key=lambda i: i[1])[1])
-                    square['bb'] = (top_left, bottom_right)
-                    
-                new_squares = []
-                for square_1 in squares:
-                    is_inside_other = False
-                    for square_2 in squares:
-                        if square_1 is not square_2:
-                            center_1 = square_1['center']
-                            (top_left_2, bottom_right_2) = square_2['bb']
-                            
-                            if center_1[0] > top_left_2[0] and center_1[0] < bottom_right_2[0] and center_1[1] > top_left_2[1] and center_1[1] < bottom_right_2[1]:
-                                is_inside_other = True
-                                break
-                    if not is_inside_other:
-                        new_squares.append(square_1)
-                squares = new_squares
-                
                 for i, square in enumerate(squares):
                     cv2.rectangle(transformed, square['bb'][0], square['bb'][1], (0,255,0), 2)
-                    cv2.putText(transformed, str(i), square['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
-                    #draw_poly(transformed, square['vertices'])
-                     
+                    cv2.putText(transformed, str(i), square['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)                     
                      
                 cv2.imshow('transformed', transformed)
-                
-            # top_right_center = ((top['center'][0] - right['center'[0])//2, (top['center'][1] - right['center'[1])//2)
-            # right_bottom_center = ((right['center'][0] - bottom['center'[0])//2, (right['center'][1] - bottom['center'[1])//2)
-            # bottom_left_center = ((bottom['center'][0] - left['center'[0])//2, (bottom['center'][1] - left['center'[1])//2)
-            # left_top_center = ((left['center'][0] - top['center'[0])//2, (left['center'][1] - top['center'[1])//2)
-            
-            
-            
-            # src_vertices = np.float32([top['center'], right['center'], bottom['center'], left['center']])
-            # dst_vertices = np.float32([(30,30), (frame.shape[1]-30,30), (frame.shape[1]-30,frame.shape[0]-30), (30,frame.shape[0]-30)])
-            # transform = cv2.getPerspectiveTransform(src_vertices, dst_vertices)
-            
-            # transformed = cv2.warpPerspective(orig_frame, transform, (orig_frame.shape[1], orig_frame.shape[0]))
-            # cv2.imshow('transformed', transformed)
-            
-            # new_squares = []
-                
-            # for row_no in range(BOARD_WIDTH):
-                # row_squares = squares[(row_no*BOARD_HEIGHT):((row_no+1)*BOARD_HEIGHT)]
-                # row_squares.sort(key=lambda i: i['center'][0])
-                
-                # board += row_squares
-           
-        # if logo is not None and len(squares) > 2:
-            # for square in squares:
-                # square['dist_to_logo'] = euclidean_dist(square['center'], logo['center'])
-            
-            # squares.sort(key=lambda i: i['dist_to_logo'])
-            
-            # for square_1 in squares:
-                # found = False
-            
-                # for square_2 in squares:
-                    # if square_1 is not square_2:
-                        # center_point = ((square_1['center'][0] + square_2['center'][0])//2, (square_1['center'][1] + square_2['center'][1])//2)
-                        # center_to_logo_angle = get_line_angle(center_point, logo['center'])
-                        # center_to_center_angle = get_line_angle(square_1['center'], square_2['center'])
-                        # angle_diff = abs(center_to_logo_angle - center_to_center_angle) 
-                        # centers_dist = euclidean_dist(square_1['center'], square_2['center'])
-                        # side_len = euclidean_dist(square_1['vertices'][0], square_1['vertices'][1])
-                        
-                        # if angle_diff > 89.5 and angle_diff < 90.5 and abs(centers_dist - side_len) < 15:
-                            # found = True
-                            # revolutions = new_rotation_angle // 360
-                            
-                            # if new_rotation_angle % 360 > 270 and center_to_logo_angle < 90:
-                                # new_rotation_angle = revolutions * 360 + center_to_logo_angle + 360
-                            # elif new_rotation_angle % 360 < 90 and center_to_logo_angle > 270:
-                                # new_rotation_angle = revolutions * 360 + center_to_logo_angle - 360
-                            # else:
-                                # new_rotation_angle = revolutions * 360 + center_to_logo_angle
-                            
-                            # cv2.line(frame, center_point, logo['center'], (0,0,255), 2)
-                            # cv2.line(frame, square_1['center'], square_2['center'], (0,0,255), 2)
-                            
-                            
-                            # #print(new_rotation_angle)
-                            # cv2.line(frame, center_point, logo['center'], (255,0,0), 2)
-                            # break
-                # if found:
-                    # break
-                
-        # rotation_angle = new_rotation_angle#rotation_angle * 0.8 + new_rotation_angle * 0.2
-        # frame_center = (frame.shape[1]//2, frame.shape[0]//2)
-        # rotation_matrix = cv2.getRotationMatrix2D(frame_center, rotation_angle, 1.0)
-        # rotated = rotate_im(orig_frame, rotation_matrix)
-        # orig_rotated = rotated.copy()
-        
-        # BOARD_HEIGHT = 7
-        # BOARD_WIDTH = 6
-        
-        # if len(squares) == BOARD_HEIGHT * BOARD_WIDTH:
-            # for square in squares:
-                # square['center'] = rotate_pts([square['center']], rotation_matrix)[0]
-                # square['vertices'] = rotate_pts(square['vertices'], rotation_matrix)
-                # square['vertices'].sort(key=lambda i: i[1])
-                # square['vertices'] = sorted(square['vertices'][:2], key=lambda i: i[0]) + sorted(square['vertices'][2:], key=lambda i: i[0], reverse=True)
-                
-            # squares.sort(key=lambda i: i['center'][1])
-                
-            # board = []
-                
-            # for row_no in range(BOARD_WIDTH):
-                # row_squares = squares[(row_no*BOARD_HEIGHT):((row_no+1)*BOARD_HEIGHT)]
-                # row_squares.sort(key=lambda i: i['center'][0])
-                
-                # board += row_squares
-                
-            # for i, square in enumerate(board):
-                # #cv2.fillConvexPoly(rotated, np.array(square['vertices']), (0,255,0))
-                # draw_poly(rotated, square['vertices'])
-                # cv2.putText(rotated, str(i), square['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
-                # i += 1
-            
-            # src_vertices = np.float32([board[0]['vertices'][0], board[6]['vertices'][1], board[41]['vertices'][2], board[35]['vertices'][3]])
-            # dst_vertices = np.float32([(10,10),(rotated.shape[1]-10,10),(rotated.shape[1]-10,rotated.shape[0]-10),(10,rotated.shape[0]-10)])
-            # transform = cv2.getPerspectiveTransform(src_vertices, dst_vertices)
-            
-            # transformed = cv2.warpPerspective(orig_rotated, transform, (rotated.shape[1], rotated.shape[0]))
-            
-            # for i, square in enumerate(board):
-                # pt_array = np.float32([square['vertices']])
-                # transformed_vertices = cv2.perspectiveTransform(pt_array, transform)
-                # square['vertices'] = [tuple(i) for i in transformed_vertices[0]]
-                
-                # draw_poly(transformed, square['vertices'])
-                # cv2.putText(transformed, str(i), square['vertices'][3], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
-                
-            
-            # cv2.imshow('transformed', transformed)
-            
-            # # top_left = board[0]['vertices'][0]
-            # # bottom_right = board[0]['vertices'][2]
-            # # print(board[0]['vertices'])
-            # # roi = orig_rotated[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
-            # # try:
-                # # roi = cv2.resize(roi, (100, 100))
-                # # cv2.imshow('roi', roi)
-            # # except:
-                # # pass
-            
-        
-        # cv2.imshow('rotated', rotated)
         
         cv2.imshow('frame', frame)
-        cv2.imshow('edges', edges)
+        cv2.imshow('edges_for_logo', edges_for_logo)
+        cv2.imshow('edges_for_squares', edges_for_squares)
         
         wait_time = 1 if use_camera else -1
         if ord('q') == cv2.waitKey(wait_time):
