@@ -81,7 +81,7 @@ def main():
         edges_for_logo = cv2.dilate(edges, kernel, iterations=3)
         edges_for_logo = cv2.erode(edges_for_logo, kernel, iterations=1)
            
-        edges_for_squares = cv2.dilate(edges, kernel, iterations=2)
+        edges_for_squares = cv2.dilate(edges, kernel, iterations=1)
         edges_for_squares = cv2.erode(edges_for_squares, kernel, iterations=1)
            
         
@@ -135,8 +135,11 @@ def main():
                 if area > 100 and area < 5000:
                     center_x = int((M['m10'] / M['m00']))
                     center_y = int((M['m01'] / M['m00']))
+
+                    vertices = contours_to_vertices(approx)
+                    side_lengths = [euclidean_dist(vertices[i], vertices[(i+1)%len(vertices)]) for i in range(len(vertices))]
                                                 
-                    square = { 'center': (center_x, center_y), 'vertices': contours_to_vertices(approx), 'area': area }
+                    square = { 'center': (center_x, center_y), 'vertices': vertices, 'area': area, 'side_lengths': side_lengths }
                     squares.append(square)
                     
                     cv2.drawContours(frame, [approx], -1, (0, 0, 255), 1)
@@ -155,12 +158,7 @@ def main():
                     if square_1 is not square_2:
                         #Outliers
                         dist_1_to_2 = euclidean_dist(square_1['center'], square_2['center'])
-                        square_2_dists = []
-                        for i in range(len(square_2['vertices'])):
-                            dist = euclidean_dist(square_2['vertices'][i], square_2['vertices'][(i+1)%len(square_2['vertices'])])
-                            square_2_dists.append(dist)
-                        
-                        max_square_2_dist = max(square_2_dists)
+                        max_square_2_dist = max(side_lengths)
                         
                         if abs(1 - max_square_2_dist / dist_1_to_2) < 0.3:
                             neighbors_cnt += 1
