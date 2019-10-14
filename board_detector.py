@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from enum import Enum
 
 class BoardDetector:
     def __init__(self, height, width, debug=False):
@@ -22,21 +23,16 @@ class BoardDetector:
         return np.sqrt((pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2)
         
     def _detect_board_rectangle(self, im):    
-        blurred = cv2.GaussianBlur(im, (17, 17), 0)
+        blurred = cv2.GaussianBlur(im, (11, 11), 0)
         ret, bw = cv2.threshold(blurred, 100, 255, cv2.THRESH_BINARY)
         edges = cv2.Canny(bw, 30, 250)
-        
-        # if self._debug:
-            # cv2.imshow('blurred', blurred)
-            # cv2.imshow('bw', bw)
-            # cv2.imshow('edges', edges)
-        
+         
         contours = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
         rectangles = []
         
         for i, contour in enumerate(contours):
             peri = cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, 0.03 * peri, True)
+            approx = cv2.approxPolyDP(contour, 0.015 * peri, True)
             
             if len(approx) == 4:
                 diagonal_1 = self._euclidean_dist(approx[0][0], approx[2][0])
@@ -49,7 +45,15 @@ class BoardDetector:
                     if M['m00'] > 1000:
                         rectangle = {'contours': approx, 'area': M['m00']}
                         rectangles.append(rectangle)
-                                      
+                    if self._debug:
+                        cv2.drawContours(blurred, [approx], -1, 255, 2)
+                       
+        
+        if self._debug:
+            cv2.imshow('blurred', blurred)
+            cv2.imshow('bw', bw)
+            cv2.imshow('edges', edges)
+                       
         if len(rectangles) > 0:
             board_rectangle = max(rectangles, key=lambda i: i['area'])
         else:
@@ -83,10 +87,10 @@ class BoardDetector:
             # cv2.imshow('top_margin', top_margin)
             # cv2.imshow('bottom_margin', bottom_margin)
         
-        margins = [{'angle': 270, 'white_cnt': np.sum(left_margin == 255)},
-                   {'angle': 90, 'white_cnt': np.sum(right_margin == 255)},
-                   {'angle': 0, 'white_cnt': np.sum(top_margin == 255)},
-                   {'angle': 180, 'white_cnt': np.sum(bottom_margin == 255)}]
+        margins = [{'angle': 0, 'white_cnt': np.sum(left_margin == 255)},
+                   {'angle': 180, 'white_cnt': np.sum(right_margin == 255)},
+                   {'angle': 90, 'white_cnt': np.sum(top_margin == 255)},
+                   {'angle': 270, 'white_cnt': np.sum(bottom_margin == 255)}]
                    
         darkest_margin = min(margins, key=lambda i: i['white_cnt'])
         darkest_margin_threshold = 30
@@ -106,8 +110,8 @@ class BoardDetector:
         elif darkest_margin_angle == 270:
             board_vertices = board_vertices[3:] + board_vertices[:3]
         
-        normalized_board_height = 640
-        normalized_board_width = 480
+        normalized_board_height = 480
+        normalized_board_width = 640
         
         orig_vertices = np.float32(board_vertices)
         dest_vertices = np.float32([(0,0), (normalized_board_width,0), (normalized_board_width,normalized_board_height), (0,normalized_board_height)])                   
@@ -131,9 +135,12 @@ class BoardDetector:
         
         if self._debug:
             cv2.imshow('normalized_bw', normalized_bw)
+            debug_im = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
         
         board_fields = []
         contours = cv2.findContours(normalized_bw, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[1]
+        
+        
         
         for i, contour in enumerate(contours):
             peri = cv2.arcLength(contour, True)
@@ -166,6 +173,12 @@ class BoardDetector:
                         bb = {'top_left': top_left, 'bottom_right': bottom_right}
                         
                         board_fields.append({'contours': approx, 'center': (center_x, center_y), 'bb': bb})
+                        
+                        if self._debug:
+                            cv2.drawContours(debug_im, [approx], -1, (0, 0, 255), 1)
+         
+        if self._debug:
+            cv2.imshow('board_fields', debug_im)
                   
         if len(board_fields) == self._width * self._height:
             board_fields = self._sort_points_in_grid(board_fields, self._width, self._height)
@@ -178,9 +191,10 @@ class BoardDetector:
         detection = None
     
         if self._debug:
-            debug_im = cv2.cvtColor(im.copy(), cv2.COLOR_GRAY2BGR)
+            debug_im = im.copy()
     
-        board_rectangle = self._detect_board_rectangle(im)
+        gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        board_rectangle = self._detect_board_rectangle(gray)
         
         if board_rectangle is not None:
             
@@ -196,15 +210,16 @@ class BoardDetector:
             bottom_right = max(board_vertices[2:], key=lambda i: i[0])
             board_vertices = [top_left, top_right, bottom_right, bottom_left]
             
-            darkest_margin_angle = self._find_darkest_board_margin_angle(im, board_vertices)
+            darkest_margin_angle = self._find_darkest_board_margin_angle(gray, board_vertices)
             
             if darkest_margin_angle is not None:
                 normalized = self._normalize_board(im, board_vertices, darkest_margin_angle)
                 
                 if self._debug:
-                    cv2.imshow('normalized', normalized)
+                    cv2.imshow('normalized_board', normalized)
                 
-                board_fields = self._find_board_fields(normalized)
+                normalized_gray = cv2.cvtColor(normalized, cv2.COLOR_BGR2GRAY)
+                board_fields = self._find_board_fields(normalized_gray)
                 
                 if board_fields is not None:
                     detection = {'normalized': normalized, 'board_fields': board_fields}
@@ -214,29 +229,113 @@ class BoardDetector:
         
         return detection
 
-def main():
-    board_detector = BoardDetector(7, 6, True)
-
-    for i in range(1,9):
-        im = cv2.imread('new_board/{}.png'.format(i))
-        gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-        cv2.imshow('im', gray)
+class Stamps(Enum):
+    HEART = 0
+    FLOWER = 1
+    GHOST = 2
+    FROG = 3
+    SUN = 4
+    
+class StampClassifier:
+    def __init__(self, debug=False):
+        self._debug = debug
+    
+        self._hsv_ranges = {Stamps.HEART: {'lower': (170, 150, 0), 'upper': (180, 255, 255)},
+                            Stamps.FLOWER: {'lower': (160, 100, 0), 'upper': (170, 130, 255)},
+                            Stamps.GHOST:  {'lower': (97, 70, 0), 'upper': (103, 100, 255)},
+                            Stamps.FROG: {'lower': (35, 190, 0), 'upper': (45, 210, 255)},
+                            Stamps.SUN: {'lower': (25, 150, 0), 'upper': (35, 220, 255)}}
         
-        detection = board_detector.detect(gray)
+    def classify(self, im, board_fields):
+        hsv = cv2.cvtColor(im, cv2.COLOR_BGR2HSV)
+        masks = {}
+        
+        if self._debug:
+            cv2.imshow('h', hsv[:,:,0])
+            cv2.imshow('s', hsv[:,:,1])
+            cv2.imshow('v', hsv[:,:,2])
+        
+        stamps = []
+        
+        for stamp in self._hsv_ranges:
+            masks[stamp] = cv2.inRange(hsv, self._hsv_ranges[stamp]['lower'], self._hsv_ranges[stamp]['upper'])
+            if self._debug:
+                cv2.imshow(str(stamp), masks[stamp])
+            
+        for field in board_fields:
+            (left, top) = field['bb']['top_left']
+            (right, bottom) = field['bb']['bottom_right']
+                
+            white_counts = []
+                
+            for stamp in masks:
+                roi = masks[stamp][top:bottom, left:right]
+                white_counts.append({'stamp': stamp, 'cnt': np.sum(roi == 255)})
+             
+            best_match = max(white_counts, key=lambda i: i['cnt'])
+            
+            if best_match['cnt'] > 10:
+                stamps.append(best_match['stamp'])
+            else:
+                stamps.append(None)
+            
+        return stamps
+        
+def main():
+    use_test_sequence = True
+
+    board_detector = BoardDetector(6, 7)
+    stamp_classifier = StampClassifier()
+
+    if use_test_sequence:
+        frames_cnt = 5
+        test_frames = ['new_board_fields/{}.png'.format(i) for i in range(frames_cnt)]
+        frame_idx = 0
+        wait_key_time = -1
+    else:
+        wait_key_time = 1
+        print('Opening camera...')
+        cap = cv2.VideoCapture(1)
+        print('Done')
+    
+    normalized = None
+    
+    while True:
+        if use_test_sequence:
+            if frame_idx >= frames_cnt:
+                break
+            im = cv2.imread(test_frames[frame_idx])
+            frame_idx += 1
+        else:
+            ret, im = cap.read()
+            
+        cv2.imshow('im', im)
+        detection = board_detector.detect(im)
         
         if detection is not None:
-            print('{} detected'.format(i))
-            normalized_color = cv2.cvtColor(detection['normalized'].copy(), cv2.COLOR_GRAY2BGR)
+            normalized = detection['normalized'].copy()
+            normalized_copy = normalized.copy()
+            cv2.putText(normalized_copy, 'Detected', (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
             
-            for i, field in enumerate(detection['board_fields']):
-                cv2.rectangle(normalized_color, field['bb']['top_left'], field['bb']['bottom_right'], (0, 255, 0), 1)
-                cv2.putText(normalized_color, str(i), field['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
-                    
-            cv2.imshow('nomalized', normalized_color)
-        else:
-            print('{} not detected'.format(i))
+            stamps = stamp_classifier.classify(normalized, detection['board_fields'])   
+            
+            for i, (field, stamp) in enumerate(zip(detection['board_fields'], stamps)):
+                cv2.rectangle(normalized_copy, field['bb']['top_left'], field['bb']['bottom_right'], (0, 255, 0), 2)
+                cv2.putText(normalized_copy, '{}'.format(i), field['center'], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 1)
+                
+                if stamp != None:
+                    cv2.putText(normalized_copy, '{}'.format(str(stamp)[7:]), (field['center'][0]-15, field['center'][1]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (255,0,0), 1)
+                
+            cv2.imshow('nomalized', normalized_copy)
+            
+            
+        elif normalized_color is not None:
+            normalized_copy = normalized.copy()
+            cv2.putText(normalized_copy, 'Not detected', (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+            cv2.imshow('nomalized', normalized_copy)
        
-        cv2.waitKey()
+        if ord('q') == cv2.waitKey(wait_key_time):
+            break
 
 if __name__ == '__main__':
     main()
